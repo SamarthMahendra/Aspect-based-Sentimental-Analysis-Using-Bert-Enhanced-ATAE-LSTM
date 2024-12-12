@@ -156,9 +156,6 @@ NLPprojectv2/
 └── Dataset.zip
 ```
 
-## License
-
-This project is licensed under the MIT License.
 
 ## Acknowledgments
 
