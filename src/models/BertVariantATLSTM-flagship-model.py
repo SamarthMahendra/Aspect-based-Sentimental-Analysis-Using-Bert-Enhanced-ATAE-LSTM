@@ -1,3 +1,4 @@
+# Import necessary libraries
 import ast
 import torch
 import torch.nn as nn
@@ -7,7 +8,7 @@ from transformers import BertTokenizer, BertModel, get_linear_schedule_with_warm
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import confusion_matrix, classification_report, f1_score
+from sklearn.metrics import confusion_matrix, classification_report, f1_score, accuracy_score
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -15,6 +16,8 @@ from collections import Counter
 import warnings
 import os
 
+# Import custom preprocessing functions
+# Ensure that these modules are available in your project
 from src.preprocessing.preprocess_dataframe import preprocess_dataframe
 from src.preprocessing.vocabulary_builder import VocabularyBuilder
 
@@ -33,35 +36,56 @@ polarity_encoding = {
     'conflict': 3,  # Added 'conflict' to the mapping
 }
 
-# Load the training and testing data
-restaurant_df_train = pd.read_csv(
-    "/Dataset/SemEval16/Train/Restaurants_Train.csv",
-    encoding='utf8'
-)
-test_df = pd.read_csv(
-    "/Dataset/SemEval16/Test/Restaurants_Test.csv",
-    encoding='utf8'
-)
 
-# Combine both train and test data for preprocessing
-df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
+# Function to load and preprocess data
+def load_and_preprocess_data(train_path, test_path):
+    # Load the training and testing data
+    restaurant_df_train = pd.read_csv(
+        train_path,
+        encoding='utf8'
+    )
+    test_df = pd.read_csv(
+        test_path,
+        encoding='utf8'
+    )
+
+    # Combine both train and test data for preprocessing
+    df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
 
 
+    return preprocess_dataframe(df)
 
-# Apply preprocessing
-new_df = preprocess_dataframe(df)
 
-# Split into train and test sets with stratification to maintain class distribution
-train_df, test_df = train_test_split(
-    new_df,
-    test_size=0.2,
+# Paths to the dataset
+train_csv_path = "data/SemEval16/Train/Restaurants_Train.csv"
+test_csv_path = "data/SemEval16/Test/Restaurants_Test.csv"
+
+# Load and preprocess data
+df = load_and_preprocess_data(train_csv_path, test_csv_path)
+
+# Split into train, validation, and test sets with stratification
+train_val_df, test_df = train_test_split(
+    df,
+    test_size=0.1,
     random_state=42,
-    stratify=new_df['polarity_encoded']
+    stratify=df['polarity_encoded']
+)
+
+train_df, val_df = train_test_split(
+    train_val_df,
+    test_size=0.1,
+    random_state=42,
+    stratify=train_val_df['polarity_encoded']
 )
 
 # Reset index after split
 train_df = train_df.reset_index(drop=True)
+val_df = val_df.reset_index(drop=True)
 test_df = test_df.reset_index(drop=True)
+
+print(f"Train set size: {len(train_df)}")
+print(f"Validation set size: {len(val_df)}")
+print(f"Test set size: {len(test_df)}")
 
 # -----------------------------
 # 2. Device Configuration
@@ -128,11 +152,15 @@ class BertAspectDataset(Dataset):
 
 # Create dataset instances
 train_dataset = BertAspectDataset(train_df, tokenizer, max_length=128)
+val_dataset = BertAspectDataset(val_df, tokenizer, max_length=128)
 test_dataset = BertAspectDataset(test_df, tokenizer, max_length=128)
 
 # Create DataLoader instances
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+batch_size = 16
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 
 # -----------------------------
@@ -206,7 +234,7 @@ class BERT_AttentionLSTM_Enhanced(nn.Module):
 
 # Initialize the enhanced model
 hidden_dim = 256
-num_classes = 4  # neutral, positive, negative, conflict
+num_classes = len(polarity_encoding)  # neutral, positive, negative, conflict
 bert_model = BertModel.from_pretrained('bert-base-uncased')
 model = BERT_AttentionLSTM_Enhanced(bert_model, hidden_dim, num_classes).to(device)
 
@@ -240,32 +268,22 @@ scheduler = get_linear_schedule_with_warmup(
 )
 
 # -----------------------------
-# 7. Training Loop with Early Stopping
+# 7. Training and Evaluation Functions
 # -----------------------------
 
 from torch.nn.utils import clip_grad_norm_
 
-# Early Stopping parameters
-best_f1 = 0
-patience = 3
-counter = 0
-best_model_path = 'best_model.pt'
 
-# Lists to store metrics
-train_acc_list = []
-train_loss_list = []
-test_acc_list = []
-test_loss_list = []
-test_f1_list = []
-
-for epoch in range(EPOCHS):
-    print(f"\nEpoch {epoch + 1}/{EPOCHS}")
+def train_epoch(model, data_loader, criterion, optimizer, scheduler, device):
+    """
+    Trains the model for one epoch.
+    """
     model.train()
     running_loss = 0.0
     correct_train = 0
     total_train = 0
 
-    for batch in tqdm(train_loader, desc="Training"):
+    for batch in tqdm(data_loader, desc="Training", leave=False):
         optimizer.zero_grad()
 
         input_ids = batch['input_ids'].to(device)
@@ -291,19 +309,23 @@ for epoch in range(EPOCHS):
 
     epoch_loss = running_loss / total_train
     epoch_acc = correct_train / total_train
-    train_loss_list.append(epoch_loss)
-    train_acc_list.append(epoch_acc)
 
-    # Evaluation on test set
+    return epoch_loss, epoch_acc
+
+
+def eval_model(model, data_loader, criterion, device):
+    """
+    Evaluates the model on a validation or test set.
+    """
     model.eval()
+    running_loss = 0.0
     correct = 0
     total = 0
-    total_loss = 0.0
     preds_list = []
     labels_list = []
 
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Evaluating"):
+        for batch in tqdm(data_loader, desc="Evaluating", leave=False):
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
             token_type_ids = batch['token_type_ids'].to(device)
@@ -311,7 +333,7 @@ for epoch in range(EPOCHS):
 
             outputs, _ = model(input_ids, attention_mask, token_type_ids)
             loss = criterion(outputs, labels)
-            total_loss += loss.item() * input_ids.size(0)
+            running_loss += loss.item() * input_ids.size(0)
 
             preds = torch.argmax(outputs, dim=1)
             correct += (preds == labels).sum().item()
@@ -320,15 +342,45 @@ for epoch in range(EPOCHS):
             preds_list.extend(preds.cpu().numpy())
             labels_list.extend(labels.cpu().numpy())
 
-    val_loss = total_loss / total
-    val_acc = correct / total
-    val_f1 = f1_score(labels_list, preds_list, average='weighted')
-    test_loss_list.append(val_loss)
-    test_acc_list.append(val_acc)
-    test_f1_list.append(val_f1)
+    epoch_loss = running_loss / total
+    epoch_acc = correct / total
+    epoch_f1 = f1_score(labels_list, preds_list, average='weighted')
 
-    print(f"Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.4f}")
-    print(f"Test Loss: {val_loss:.4f}, Test Acc: {val_acc:.4f}, Test F1: {val_f1:.4f}")
+    return epoch_loss, epoch_acc, epoch_f1, preds_list, labels_list
+
+
+# -----------------------------
+# 8. Training Loop with Early Stopping
+# -----------------------------
+
+# Early Stopping parameters
+best_f1 = 0
+patience = 3
+counter = 0
+best_model_path = 'best_model.pt'
+
+# Lists to store metrics
+train_acc_list = []
+train_loss_list = []
+val_acc_list = []
+val_loss_list = []
+val_f1_list = []
+
+for epoch in range(EPOCHS):
+    print(f"\nEpoch {epoch + 1}/{EPOCHS}")
+
+    # Train
+    train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, scheduler, device)
+    train_loss_list.append(train_loss)
+    train_acc_list.append(train_acc)
+    print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
+
+    # Validate
+    val_loss, val_acc, val_f1, _, _ = eval_model(model, val_loader, criterion, device)
+    val_loss_list.append(val_loss)
+    val_acc_list.append(val_acc)
+    val_f1_list.append(val_f1)
+    print(f"Validation Loss: {val_loss:.4f}, Validation Acc: {val_acc:.4f}, Validation F1: {val_f1:.4f}")
 
     # Early Stopping Check
     if val_f1 > best_f1:
@@ -348,7 +400,7 @@ for epoch in range(EPOCHS):
 model.load_state_dict(torch.load(best_model_path))
 
 # -----------------------------
-# 8. Inference on Sample Sentence
+# 9. Inference on Sample Sentence
 # -----------------------------
 
 test_sentence = (
@@ -369,7 +421,7 @@ def preprocess_input_bert_embeddings(sentence, aspect, tokenizer, max_length=128
         max_length (int): Maximum token length.
 
     Returns:
-        dict: Dictionary containing 'input_ids' and 'attention_mask'.
+        dict: Dictionary containing 'input_ids', 'attention_mask', and 'token_type_ids'.
     """
     encoding = tokenizer(
         text=sentence,
@@ -406,55 +458,114 @@ with torch.no_grad():
 
         print(f"Aspect: '{aspect}', Predicted Sentiment: {inv_polarity[pred_label]}")
 
+
 # -----------------------------
-# 9. Visualization & Metrics
+# 10. Visualization & Metrics
 # -----------------------------
 
 # 1. Class Distribution Plot
-fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-sns.countplot(x=train_df['polarity_encoded'], ax=ax[0], palette='viridis')
-ax[0].set_title('Training Set Class Distribution')
-ax[0].set_xlabel('Polarity')
-ax[0].set_ylabel('Count')
-sns.countplot(x=test_df['polarity_encoded'], ax=ax[1], palette='viridis')
-ax[1].set_title('Testing Set Class Distribution')
-ax[1].set_xlabel('Polarity')
-ax[1].set_ylabel('Count')
-plt.tight_layout()
-plt.show()
+def plot_class_distribution(train_df, val_df, test_df, polarity_encoding):
+    fig, ax = plt.subplots(1, 3, figsize=(18, 5))
+    sns.countplot(x='polarity_encoded', data=train_df, ax=ax[0], palette='viridis')
+    ax[0].set_title('Training Set Class Distribution')
+    ax[0].set_xlabel('Polarity')
+    ax[0].set_ylabel('Count')
+    ax[0].set_xticklabels([k for k, v in sorted(polarity_encoding.items(), key=lambda item: item[1])])
+
+    sns.countplot(x='polarity_encoded', data=val_df, ax=ax[1], palette='viridis')
+    ax[1].set_title('Validation Set Class Distribution')
+    ax[1].set_xlabel('Polarity')
+    ax[1].set_ylabel('Count')
+    ax[1].set_xticklabels([k for k, v in sorted(polarity_encoding.items(), key=lambda item: item[1])])
+
+    sns.countplot(x='polarity_encoded', data=test_df, ax=ax[2], palette='viridis')
+    ax[2].set_title('Testing Set Class Distribution')
+    ax[2].set_xlabel('Polarity')
+    ax[2].set_ylabel('Count')
+    ax[2].set_xticklabels([k for k, v in sorted(polarity_encoding.items(), key=lambda item: item[1])])
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_class_distribution(train_df, val_df, test_df, polarity_encoding)
+
 
 # 2. Confusion Matrix & Classification Report on Test Set
-# Recompute predictions on the test set
-model.eval()
-preds_list = []
-labels_list = []
+def evaluate_on_test_set(model, test_loader, criterion, device, polarity_encoding):
+    model.eval()
+    preds_list = []
+    labels_list = []
 
-with torch.no_grad():
-    for batch in tqdm(test_loader, desc="Final Evaluation"):
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        token_type_ids = batch['token_type_ids'].to(device)
-        labels = batch['labels'].to(device)
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Final Evaluation"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            token_type_ids = batch['token_type_ids'].to(device)
+            labels = batch['labels'].to(device)
 
-        outputs, _ = model(input_ids, attention_mask, token_type_ids)
-        preds = torch.argmax(outputs, dim=1)
+            outputs, _ = model(input_ids, attention_mask, token_type_ids)
+            preds = torch.argmax(outputs, dim=1)
 
-        preds_list.extend(preds.cpu().numpy())
-        labels_list.extend(labels.cpu().numpy())
+            preds_list.extend(preds.cpu().numpy())
+            labels_list.extend(labels.cpu().numpy())
 
-# Generate confusion matrix
-cm = confusion_matrix(labels_list, preds_list)
+    # Generate confusion matrix
+    cm = confusion_matrix(labels_list, preds_list)
 
-# Plot confusion matrix
-plt.figure(figsize=(6, 5))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-            xticklabels=['neutral', 'positive', 'negative'],
-            yticklabels=['neutral', 'positive', 'negative'])
-plt.title('Confusion Matrix on Test Set')
-plt.xlabel('Predicted')
-plt.ylabel('True')
-plt.show()
+    # Define labels in order
+    labels_order = sorted(polarity_encoding, key=polarity_encoding.get)
 
-# Generate and print classification report
-print("\nClassification Report on Test Set:")
-print(classification_report(labels_list, preds_list, target_names=['neutral', 'positive', 'negative']))
+    # Plot confusion matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=["neutral", 'positive', "negative"],
+                yticklabels=["neutral", 'positive', "negative"])
+    plt.title('Confusion Matrix on Test Set')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.show()
+
+    # Generate and print classification report
+    print("\nClassification Report on Test Set:")
+    print(classification_report(labels_list, preds_list, target_names=["neutral", 'positive', "negative"]))
+
+    # Overall Accuracy
+    overall_acc = accuracy_score(labels_list, preds_list)
+    print(f"Overall Test Accuracy: {overall_acc:.4f}")
+
+
+evaluate_on_test_set(model, test_loader, criterion, device, polarity_encoding)
+
+
+# 3. Training and Validation Metrics Plot
+def plot_training_history(train_loss, train_acc, val_loss, val_acc, val_f1):
+    epochs = range(1, len(train_loss) + 1)
+
+    plt.figure(figsize=(14, 5))
+
+    # Plot Loss
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, train_loss, 'b-', label='Training Loss')
+    plt.plot(epochs, val_loss, 'r-', label='Validation Loss')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    # Plot Accuracy and F1
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, train_acc, 'b-', label='Training Accuracy')
+    plt.plot(epochs, val_acc, 'r-', label='Validation Accuracy')
+    plt.plot(epochs, val_f1, 'g-', label='Validation F1 Score')
+    plt.title('Training and Validation Metrics')
+    plt.xlabel('Epoch')
+    plt.ylabel('Score')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_training_history(train_loss_list, train_acc_list, val_loss_list, val_acc_list, val_f1_list)
+

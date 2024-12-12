@@ -39,9 +39,11 @@ polarity_encoding = {
     'conflict': 3,  # Add 'conflict' to the mapping
 }
 
+
 # Load the Data
-train_csv_path = "/Dataset/SemEval16/Train/Restaurants_Train.csv"
-test_csv_path = "/Dataset/SemEval16/Test/Restaurants_Test.csv"
+train_csv_path = "data/SemEval16/Train/Restaurants_Train.csv"
+test_csv_path = "data/SemEval16/Test/Restaurants_Test.csv"
+
 
 restaurant_df_train = pd.read_csv(train_csv_path, encoding='utf8')
 test_df = pd.read_csv(test_csv_path, encoding='utf8')
@@ -326,7 +328,7 @@ optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 history = train_model(
     model=model,
     train_loader=train_loader,
-    val_loader=test_loader,  # Using test set as validation for simplicity
+    val_loader=test_loader,
     criterion=criterion,
     optimizer=optimizer,
     num_epochs=NUM_EPOCHS,
@@ -349,4 +351,3 @@ plot_confusion_matrix(evaluation_results['true_labels'], evaluation_results['pre
 # Optional: Plot Class Distribution
 plot_class_distribution(y, classes)
 
-# End of Script

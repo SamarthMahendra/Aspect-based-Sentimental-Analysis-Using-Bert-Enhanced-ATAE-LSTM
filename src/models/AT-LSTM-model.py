@@ -1,29 +1,26 @@
-
-import torch.nn.functional as F
-
-
-# Import Necessary Libraries
-import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from sklearn.metrics import classification_report, confusion_matrix
-from collections import Counter
 import torch.optim as optim
-from typing import List, Tuple, Dict
-import logging
 
+import numpy as np
 import pandas as pd
 import re
+import logging
+from collections import Counter
+from typing import List, Tuple, Dict
+
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+
 import nltk
-
-from src.preprocessing.preprocess_dataframe import preprocess_dataframe
-from src.preprocessing.vocabulary_builder import VocabularyBuilder
-
-# Download NLTK Tokenizer Resources
 nltk.download('punkt')
+
+# Import custom preprocessing functions
+# Ensure these modules are accessible in your project structure
+from src.preprocessing.preprocess_dataframe import preprocess_dataframe
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -38,8 +35,8 @@ polarity_encoding = {
 }
 
 # Load the Data
-train_csv_path = "/Dataset/SemEval16/Train/Restaurants_Train.csv"
-test_csv_path = "/Dataset/SemEval16/Test/Restaurants_Test.csv"
+train_csv_path = "data/SemEval16/Train/Restaurants_Train.csv"
+test_csv_path = "data/SemEval16/Test/Restaurants_Test.csv"
 
 restaurant_df_train = pd.read_csv(train_csv_path, encoding='utf8')
 test_df = pd.read_csv(test_csv_path, encoding='utf8')
@@ -48,11 +45,10 @@ test_df = pd.read_csv(test_csv_path, encoding='utf8')
 df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
 logger.info(f"Combined dataset shape: {df.shape}")
 
-
-
 # Apply Preprocessing
 new_df = preprocess_dataframe(df)
-new_df.head()
+logger.info("Dataframe after preprocessing:")
+logger.info(new_df.head())
 
 # Function to Clean Text
 def clean_text(text: str) -> str:
@@ -69,12 +65,23 @@ X_raw_text = new_df['raw_text'].tolist()
 X_aspect = new_df['aspect_term'].tolist()
 y = new_df['polarity_encoded'].values
 
-# Split the Data into Training and Testing Sets
-X_train_text, X_test_text, X_train_aspect, X_test_aspect, y_train, y_test = train_test_split(
-    X_raw_text, X_aspect, y, test_size=0.2, random_state=42, stratify=y
+from sklearn.model_selection import train_test_split
+
+# First, split off the test set (15%)
+X_train_val_text, X_test_text, X_train_val_aspect, X_test_aspect, y_train_val, y_test = train_test_split(
+    X_raw_text, X_aspect, y, test_size=0.15, random_state=42, stratify=y
 )
-logger.info(f"Training set size: {len(X_train_text)}")
-logger.info(f"Testing set size: {len(X_test_text)}")
+
+# Then, split the remaining 85% into 70% train and 15% validation
+# The validation size relative to the train_val set is 15/85 ≈ 0.1765
+X_train_text, X_val_text, X_train_aspect, X_val_aspect, y_train, y_val = train_test_split(
+    X_train_val_text, X_train_val_aspect, y_train_val, test_size=0.1765, random_state=42, stratify=y_train_val
+)
+
+# Logging
+logger.info(f"Training set size: {len(X_train_text)} ({len(X_train_text)/len(X_raw_text)*100:.2f}%)")
+logger.info(f"Validation set size: {len(X_val_text)} ({len(X_val_text)/len(X_raw_text)*100:.2f}%)")
+logger.info(f"Test set size: {len(X_test_text)} ({len(X_test_text)/len(X_raw_text)*100:.2f}%)")
 
 # Vocabulary Builder Class
 class VocabularyBuilder:
@@ -127,8 +134,7 @@ def collate_fn(batch: List[Tuple]) -> Tuple:
     aspects_padded = pad_sequence(aspects, batch_first=True, padding_value=0)
     return texts_padded, aspects_padded, torch.stack(labels)
 
-
-
+# Attention Layer
 class AttentionLayer(nn.Module):
     def __init__(self, hidden_dim: int):
         super(AttentionLayer, self).__init__()
@@ -153,7 +159,7 @@ class AttentionLayer(nn.Module):
 
         return weighted_output, attention_weights
 
-
+# Aspect Attention LSTM Model
 class AspectAttentionLSTM(nn.Module):
     def __init__(self, vocab_size: int, embed_dim: int, hidden_dim: int, num_classes: int, num_layers: int = 2,
                  dropout: float = 0.5):
@@ -224,7 +230,7 @@ class AspectAttentionLSTM(nn.Module):
 
         return output, sentence_weights, aspect_weights
 
-
+# Training Function
 def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
                 criterion: nn.Module, optimizer: optim.Optimizer, num_epochs: int,
                 device: torch.device) -> Dict:
@@ -275,22 +281,23 @@ def train_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoad
         history['val_loss'].append(avg_val_loss)
         history['val_accuracy'].append(val_accuracy)
 
-        print(f'Epoch {epoch + 1}/{num_epochs}:')
-        print(f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%')
+        logger.info(f'Epoch {epoch + 1}/{num_epochs}:')
+        logger.info(f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%')
 
         if val_accuracy > best_val_acc:
             best_val_acc = val_accuracy
             patience_counter = 0
             torch.save(model.state_dict(), 'best_model_attention.pth')
+            logger.info("Best model saved.")
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print("Early stopping triggered")
+                logger.info("Early stopping triggered")
                 break
 
     return history
 
-
+# Evaluation Function
 def evaluate_model(model: nn.Module, test_loader: DataLoader, device: torch.device) -> Dict:
     model.eval()
     all_predictions = []
@@ -310,8 +317,8 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, device: torch.devi
             all_aspect_attention.extend(aspect_attention.cpu().numpy())
 
     report = classification_report(all_labels, all_predictions, digits=4)
-    print("\nClassification Report:")
-    print(report)
+    logger.info("\nClassification Report:")
+    logger.info(f"\n{report}")
 
     return {
         'predictions': all_predictions,
@@ -321,10 +328,14 @@ def evaluate_model(model: nn.Module, test_loader: DataLoader, device: torch.devi
         'classification_report': report
     }
 
+# Check Device
 if torch.backends.mps.is_available():
     device = torch.device('mps')
+elif torch.cuda.is_available():
+    device = torch.device('cuda')
 else:
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
+logger.info(f'Using device: {device}')
 
 # Define Hyperparameters
 EMBED_DIM = 300
@@ -336,16 +347,21 @@ NUM_EPOCHS = 20
 LEARNING_RATE = 0.001
 MIN_WORD_FREQ = 2
 
-
 # Build Vocabulary
 vocab_builder = VocabularyBuilder(min_freq=MIN_WORD_FREQ)
-vocab_builder.build_vocab(X_train_text + X_train_aspect)
+vocab_builder.build_vocab(X_train_text + X_train_aspect + X_val_text + X_val_aspect)
 
 # Create Datasets
 train_dataset = AspectSentimentDataset(
     texts=X_train_text,
     aspects=X_train_aspect,
     labels=y_train,
+    vocab=vocab_builder
+)
+val_dataset = AspectSentimentDataset(
+    texts=X_val_text,
+    aspects=X_val_aspect,
+    labels=y_val,
     vocab=vocab_builder
 )
 test_dataset = AspectSentimentDataset(
@@ -362,6 +378,12 @@ train_loader = DataLoader(
     shuffle=True,
     collate_fn=collate_fn
 )
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    collate_fn=collate_fn
+)
 test_loader = DataLoader(
     test_dataset,
     batch_size=BATCH_SIZE,
@@ -369,16 +391,20 @@ test_loader = DataLoader(
     collate_fn=collate_fn
 )
 
+logger.info(f"Number of training batches: {len(train_loader)}")
+logger.info(f"Number of validation batches: {len(val_loader)}")
+logger.info(f"Number of testing batches: {len(test_loader)}")
 
 # Initialize model with attention
 model = AspectAttentionLSTM(
     vocab_size=len(vocab_builder.word2idx),
     embed_dim=EMBED_DIM,
     hidden_dim=HIDDEN_DIM,
-    num_classes=4,
+    num_classes=4,  # Including 'conflict'
     num_layers=NUM_LAYERS,
     dropout=DROPOUT
 ).to(device)
+logger.info("Model initialized.")
 
 # Loss function and optimizer
 criterion = nn.CrossEntropyLoss()
@@ -388,12 +414,16 @@ optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 history = train_model(
     model=model,
     train_loader=train_loader,
-    val_loader=test_loader,
+    val_loader=val_loader,
     criterion=criterion,
     optimizer=optimizer,
     num_epochs=NUM_EPOCHS,
     device=device
 )
 
-# Evaluate the model
+# Load the best model
+model.load_state_dict(torch.load('best_model_attention.pth'))
+logger.info("Best model loaded for evaluation.")
+
+# Evaluate the model on the Test Set
 evaluation_results = evaluate_model(model, test_loader, device)

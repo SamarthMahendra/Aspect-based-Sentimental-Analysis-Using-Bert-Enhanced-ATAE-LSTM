@@ -1,4 +1,8 @@
 # Vocabulary Builder Class
+from typing import List
+from collections import Counter
+import logging
+
 class VocabularyBuilder:
     def __init__(self, min_freq: int = 2):
         self.word2idx = {'<pad>': 0, '<unk>': 1}
@@ -19,7 +23,6 @@ class VocabularyBuilder:
                 self.idx2word[idx] = word
                 idx += 1
 
-        logger.info(f"Vocabulary size: {len(self.word2idx)}")
 
     def text_to_indices(self, text: str) -> List[int]:
         """Convert text to list of indices"""

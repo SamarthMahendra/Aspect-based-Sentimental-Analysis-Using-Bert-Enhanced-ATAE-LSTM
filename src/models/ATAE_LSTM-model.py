@@ -17,12 +17,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 import os
-# import tuple Dict
 
-
-
+# Import the preprocessing function
 from src.preprocessing.preprocess_dataframe import preprocess_dataframe
-from src.preprocessing.vocabulary_builder import VocabularyBuilder
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
@@ -61,32 +58,37 @@ polarity_encoding = {
 }
 
 # Define file paths
-train_path = "/Dataset/SemEval16/Train/Restaurants_Train.csv"
-test_path = "/Dataset/SemEval16/Test/Restaurants_Test.csv"
+train_path = "data/SemEval16/Train/Restaurants_Train.csv"
+test_path = "data/SemEval16/Test/Restaurants_Test.csv"
 
 # Load the training and testing data
 restaurant_df_train = pd.read_csv(train_path, encoding='utf8')
-test_df = pd.read_csv(test_path, encoding='utf8')
+test_df_original = pd.read_csv(test_path, encoding='utf8')
 
 # Combine train and test data for preprocessing
-df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
-
-
-
-
+df = pd.concat([restaurant_df_train, test_df_original], ignore_index=True)
 
 # Apply preprocessing
 new_df = preprocess_dataframe(df)
 
-# Split into train and test sets with stratification to maintain class distribution
-train_df, test_df = train_test_split(
+# Split into train (70%) and temp (30%) sets with stratification
+train_df, temp_df = train_test_split(
     new_df,
-    test_size=0.2,
+    test_size=0.30,
     random_state=SEED,
     stratify=new_df['polarity_encoded']
 )
 
+# Further split temp into validation (15%) and test (15%) sets
+val_df, test_df = train_test_split(
+    temp_df,
+    test_size=0.50,  # 50% of 30% is 15%
+    random_state=SEED,
+    stratify=temp_df['polarity_encoded']
+)
+
 print(f"Training samples: {len(train_df)}")
+print(f"Validation samples: {len(val_df)}")
 print(f"Testing samples: {len(test_df)}")
 
 # Initialize the tokenizer
@@ -137,14 +139,17 @@ class AspectDataset(Dataset):
 
 # Create datasets
 train_dataset = AspectDataset(train_df, tokenizer, MAX_LEN)
-val_dataset = AspectDataset(test_df, tokenizer, MAX_LEN)
+val_dataset = AspectDataset(val_df, tokenizer, MAX_LEN)
+test_dataset = AspectDataset(test_df, tokenizer, MAX_LEN)
 
 # Create DataLoaders
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
 print(f"Number of training batches: {len(train_loader)}")
 print(f"Number of validation batches: {len(val_loader)}")
+print(f"Number of testing batches: {len(test_loader)}")
 
 
 class ATAEAttentionLayer(nn.Module):
@@ -361,13 +366,13 @@ def train_atae_model(model: nn.Module,
     return history
 
 
-def evaluate_atae_model(model: nn.Module, test_loader: DataLoader, device: torch.device) -> Dict:
+def evaluate_atae_model(model: nn.Module, data_loader: DataLoader, device: torch.device) -> Dict:
     """
     Evaluate the ATAE-LSTM model.
 
     Args:
         model (nn.Module): The trained ATAE-LSTM model.
-        test_loader (DataLoader): DataLoader for test data.
+        data_loader (DataLoader): DataLoader for evaluation data.
         device (torch.device): Device to evaluate on.
 
     Returns:
@@ -379,7 +384,7 @@ def evaluate_atae_model(model: nn.Module, test_loader: DataLoader, device: torch
     all_attention_weights = []
 
     with torch.no_grad():
-        for texts, aspects, labels in test_loader:
+        for texts, aspects, labels in data_loader:
             texts, aspects, labels = texts.to(device), aspects.to(device), labels.to(device)
             outputs, attention_weights = model(texts, aspects)
             _, predicted = torch.max(outputs.data, 1)
@@ -444,8 +449,29 @@ history = train_atae_model(
 model.load_state_dict(torch.load('best_model_atae.pth'))
 print("Best model loaded for evaluation.")
 
-# Evaluate the model
-evaluation_results = evaluate_atae_model(model, val_loader, device)
+# Evaluate on Validation Set
+print("\nEvaluating on Validation Set:")
+evaluation_val = evaluate_atae_model(model, val_loader, device)
 
+# Evaluate on Test Set
+print("\nEvaluating on Test Set:")
+evaluation_test = evaluate_atae_model(model, test_loader, device)
 
+# (Optional) Plotting Training and Validation Loss
+plt.figure(figsize=(10, 5))
+plt.plot(history['train_loss'], label='Training Loss')
+plt.plot(history['val_loss'], label='Validation Loss')
+plt.title('Loss over Epochs')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
 
+# (Optional) Plotting Validation Accuracy
+plt.figure(figsize=(10, 5))
+plt.plot(history['val_accuracy'], label='Validation Accuracy')
+plt.title('Validation Accuracy over Epochs')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy (%)')
+plt.legend()
+plt.show()
