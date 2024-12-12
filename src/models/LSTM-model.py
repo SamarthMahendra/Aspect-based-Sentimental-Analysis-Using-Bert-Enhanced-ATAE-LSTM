@@ -20,6 +20,10 @@ import nltk
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from src.preprocessing.preprocess_dataframe import preprocess_dataframe
+from src.preprocessing.text_cleaning import clean_text
+from src.preprocessing.vocabulary_builder import VocabularyBuilder
+
 # Download NLTK Tokenizer Resources
 nltk.download('punkt')
 
@@ -36,8 +40,8 @@ polarity_encoding = {
 }
 
 # Load the Data
-train_csv_path = "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Train/Restaurants_Train.csv"
-test_csv_path = "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Test/Restaurants_Test.csv"
+train_csv_path = "/Dataset/SemEval16/Train/Restaurants_Train.csv"
+test_csv_path = "/Dataset/SemEval16/Test/Restaurants_Test.csv"
 
 restaurant_df_train = pd.read_csv(train_csv_path, encoding='utf8')
 test_df = pd.read_csv(test_csv_path, encoding='utf8')
@@ -46,37 +50,12 @@ test_df = pd.read_csv(test_csv_path, encoding='utf8')
 df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
 logger.info(f"Combined dataset shape: {df.shape}")
 
-# Function to Preprocess the DataFrame
-def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    processed_rows = []
-    for _, row in df.iterrows():
-        raw_text = row['raw_text']
-        # Use ast.literal_eval instead of eval for safety
-        try:
-            aspect_terms = ast.literal_eval(row['aspectTerms'])
-        except (ValueError, SyntaxError):
-            aspect_terms = []
-        for aspect in aspect_terms:
-            polarity = aspect.get('polarity', 'none')
-            if polarity != 'none':
-                processed_rows.append({
-                    'raw_text': raw_text,
-                    'aspect_term': aspect['term'],
-                    'polarity_encoded': polarity_encoding.get(polarity, 0)  # Default to 'neutral' if not found
-                })
-    processed_df = pd.DataFrame(processed_rows)
-    logger.info(f"Processed dataframe shape: {processed_df.shape}")
-    return processed_df
 
 # Apply Preprocessing
 new_df = preprocess_dataframe(df)
 new_df.head()
 
-# Function to Clean Text
-def clean_text(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
-    return text.strip()
+
 
 # Apply Text Cleaning
 new_df['raw_text'] = new_df['raw_text'].apply(clean_text)
@@ -94,32 +73,7 @@ X_train_text, X_test_text, X_train_aspect, X_test_aspect, y_train, y_test = trai
 logger.info(f"Training set size: {len(X_train_text)}")
 logger.info(f"Testing set size: {len(X_test_text)}")
 
-# Vocabulary Builder Class
-class VocabularyBuilder:
-    def __init__(self, min_freq: int = 2):
-        self.word2idx = {'<pad>': 0, '<unk>': 1}
-        self.idx2word = {0: '<pad>', 1: '<unk>'}
-        self.word_freq = Counter()
-        self.min_freq = min_freq
 
-    def build_vocab(self, texts: List[str]) -> None:
-        """Build vocabulary from list of texts"""
-        for text in texts:
-            words = text.split()
-            self.word_freq.update(words)
-
-        idx = len(self.word2idx)
-        for word, freq in self.word_freq.items():
-            if freq >= self.min_freq and word not in self.word2idx:
-                self.word2idx[word] = idx
-                self.idx2word[idx] = word
-                idx += 1
-
-        logger.info(f"Vocabulary size: {len(self.word2idx)}")
-
-    def text_to_indices(self, text: str) -> List[int]:
-        """Convert text to list of indices"""
-        return [self.word2idx.get(word, self.word2idx['<unk>']) for word in text.split()]
 
 # Dataset Class
 class AspectSentimentDataset(Dataset):

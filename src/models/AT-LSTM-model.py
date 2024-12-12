@@ -1,12 +1,4 @@
-import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
-from sklearn.metrics import classification_report
-from collections import Counter
-import torch.optim as optim
-from typing import List, Tuple, Dict
+
 import torch.nn.functional as F
 
 
@@ -23,14 +15,12 @@ from typing import List, Tuple, Dict
 import logging
 
 import pandas as pd
-import ast
 import re
 from sklearn.model_selection import train_test_split
-from nltk.tokenize import word_tokenize
 import nltk
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+from src.preprocessing.preprocess_dataframe import preprocess_dataframe
+from src.preprocessing.vocabulary_builder import VocabularyBuilder
 
 # Download NLTK Tokenizer Resources
 nltk.download('punkt')
@@ -48,8 +38,8 @@ polarity_encoding = {
 }
 
 # Load the Data
-train_csv_path = "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Train/Restaurants_Train.csv"
-test_csv_path = "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Test/Restaurants_Test.csv"
+train_csv_path = "/Dataset/SemEval16/Train/Restaurants_Train.csv"
+test_csv_path = "/Dataset/SemEval16/Test/Restaurants_Test.csv"
 
 restaurant_df_train = pd.read_csv(train_csv_path, encoding='utf8')
 test_df = pd.read_csv(test_csv_path, encoding='utf8')
@@ -58,27 +48,7 @@ test_df = pd.read_csv(test_csv_path, encoding='utf8')
 df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
 logger.info(f"Combined dataset shape: {df.shape}")
 
-# Function to Preprocess the DataFrame
-def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    processed_rows = []
-    for _, row in df.iterrows():
-        raw_text = row['raw_text']
-        # Use ast.literal_eval instead of eval for safety
-        try:
-            aspect_terms = ast.literal_eval(row['aspectTerms'])
-        except (ValueError, SyntaxError):
-            aspect_terms = []
-        for aspect in aspect_terms:
-            polarity = aspect.get('polarity', 'none')
-            if polarity != 'none':
-                processed_rows.append({
-                    'raw_text': raw_text,
-                    'aspect_term': aspect['term'],
-                    'polarity_encoded': polarity_encoding.get(polarity, 0)  # Default to 'neutral' if not found
-                })
-    processed_df = pd.DataFrame(processed_rows)
-    logger.info(f"Processed dataframe shape: {processed_df.shape}")
-    return processed_df
+
 
 # Apply Preprocessing
 new_df = preprocess_dataframe(df)

@@ -15,6 +15,9 @@ from collections import Counter
 import warnings
 import os
 
+from src.preprocessing.preprocess_dataframe import preprocess_dataframe
+from src.preprocessing.vocabulary_builder import VocabularyBuilder
+
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore")
 
@@ -32,40 +35,17 @@ polarity_encoding = {
 
 # Load the training and testing data
 restaurant_df_train = pd.read_csv(
-    "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Train/Restaurants_Train.csv",
+    "/Dataset/SemEval16/Train/Restaurants_Train.csv",
     encoding='utf8'
 )
 test_df = pd.read_csv(
-    "/Users/samarthmahendra/bioinfo/NLPprojectv2/Dataset/SemEval16/Test/Restaurants_Test.csv",
+    "/Dataset/SemEval16/Test/Restaurants_Test.csv",
     encoding='utf8'
 )
 
 # Combine both train and test data for preprocessing
 df = pd.concat([restaurant_df_train, test_df], ignore_index=True)
 
-
-def preprocess_dataframe(df):
-    """
-    Preprocess the dataframe by extracting relevant information and encoding polarity.
-
-    Args:
-        df (pd.DataFrame): Combined train and test dataframe.
-
-    Returns:
-        pd.DataFrame: Processed dataframe with 'raw_text', 'aspect_term', and 'polarity_encoded'.
-    """
-    processed_rows = []
-    for _, row in df.iterrows():
-        raw_text = row['raw_text']
-        aspect_terms = ast.literal_eval(row['aspectTerms'])  # Convert string representation of list to actual list
-        for aspect in aspect_terms:
-            if aspect['polarity'] != 'none':  # Filter out aspects with 'none' polarity
-                processed_rows.append({
-                    'raw_text': raw_text,
-                    'aspect_term': aspect['term'],
-                    'polarity_encoded': polarity_encoding[aspect['polarity']]
-                })
-    return pd.DataFrame(processed_rows)
 
 
 # Apply preprocessing
